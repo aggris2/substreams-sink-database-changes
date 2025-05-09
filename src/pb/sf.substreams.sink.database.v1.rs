@@ -2,21 +2,21 @@
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DatabaseChanges {
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub table_changes: ::prost::alloc::vec::Vec<TableChange>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableChange {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub table: ::prost::alloc::string::String,
-    #[prost(uint64, tag = "3")]
+    #[prost(uint64, tag="3")]
     pub ordinal: u64,
-    #[prost(enumeration = "table_change::Operation", tag = "4")]
+    #[prost(enumeration="table_change::Operation", tag="4")]
     pub operation: i32,
-    #[prost(message, repeated, tag = "5")]
+    #[prost(message, repeated, tag="5")]
     pub fields: ::prost::alloc::vec::Vec<Field>,
-    #[prost(oneof = "table_change::PrimaryKey", tags = "2, 6")]
+    #[prost(oneof="table_change::PrimaryKey", tags="2, 6")]
     pub primary_key: ::core::option::Option<table_change::PrimaryKey>,
 }
 /// Nested message and enum types in `TableChange`.
@@ -29,6 +29,13 @@ pub mod table_change {
         Create = 1,
         Update = 2,
         Delete = 3,
+        /// The upsert might not be supported by all drivers the sink supports,
+        /// refer to <https://github.com/streamingfast/substreams-sink-sql> for
+        /// which drivers support it.
+        ///
+        /// At time of writing, the Postgres driver supports was the only one supporting
+        /// it.
+        Upsert = 4,
     }
     impl Operation {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -41,6 +48,7 @@ pub mod table_change {
                 Operation::Create => "OPERATION_CREATE",
                 Operation::Update => "OPERATION_UPDATE",
                 Operation::Delete => "OPERATION_DELETE",
+                Operation::Upsert => "OPERATION_UPSERT",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -50,34 +58,34 @@ pub mod table_change {
                 "OPERATION_CREATE" => Some(Self::Create),
                 "OPERATION_UPDATE" => Some(Self::Update),
                 "OPERATION_DELETE" => Some(Self::Delete),
+                "OPERATION_UPSERT" => Some(Self::Upsert),
                 _ => None,
             }
         }
     }
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+#[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum PrimaryKey {
-        #[prost(string, tag = "2")]
+        #[prost(string, tag="2")]
         Pk(::prost::alloc::string::String),
-        #[prost(message, tag = "6")]
+        #[prost(message, tag="6")]
         CompositePk(super::CompositePrimaryKey),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CompositePrimaryKey {
-    #[prost(map = "string, string", tag = "1")]
-    pub keys:
-        ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(map="string, string", tag="1")]
+    pub keys: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Field {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub new_value: ::prost::alloc::string::String,
-    #[prost(string, tag = "3")]
+    #[prost(string, tag="3")]
     pub old_value: ::prost::alloc::string::String,
 }
 // @@protoc_insertion_point(module)

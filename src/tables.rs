@@ -42,13 +42,68 @@ impl Tables {
             Operation::Unspecified => {
                 row.operation = Operation::Create;
             }
-            Operation::Create => {}
+            Operation::Create => { /* Already the right operation */ }
+            Operation::Upsert => {
+                panic!(
+                    "cannot create a row after a scheduled upsert operation, create and upsert are exclusive - table: {} key: {}",
+                    table, key_debug,
+                )
+            }
             Operation::Update => {
                 panic!("cannot create a row that was marked for update")
             }
             Operation::Delete => {
                 panic!(
                     "cannot create a row after a scheduled delete operation - table: {} key: {}",
+                    table, key_debug,
+                )
+            }
+        }
+        row
+    }
+
+    /// Upsert (insert or update) a new row in the table with the given primary key.
+    ///
+    /// *Note* Ensure that the SQL sink driver you use supports upsert operations.
+    ///
+    /// ```
+    /// // With a Primary Key of type `Single`
+    /// use crate::substreams_database_change::tables::Tables;
+    /// let mut tables = Tables::new();
+    /// tables.upsert_row("myevent", "my_key",);
+    /// ```
+    ///
+    /// ```
+    /// // With a Primary Key of type `Composite`
+    /// use crate::substreams_database_change::tables::Tables;
+    /// let mut tables = Tables::new();
+    /// tables.upsert_row("myevent", [("evt_tx_hash", String::from("hello")), ("evt_index", String::from("world"))]);
+    /// ```
+    pub fn upsert_row<K: Into<PrimaryKey>>(&mut self, table: &str, key: K) -> &mut Row {
+        let rows = self.tables.entry(table.to_string()).or_insert(Rows::new());
+        let k = key.into();
+        let key_debug = format!("{:?}", k);
+        let row = rows.pks.entry(k).or_insert(Row::new());
+        match row.operation {
+            Operation::Unspecified => {
+                row.operation = Operation::Upsert;
+            }
+            Operation::Create => {
+                panic!(
+                    "cannot upsert a row after a scheduled create operation, create and upsert are exclusive - table: {} key: {}",
+                    table, key_debug,
+                )
+            }
+            Operation::Upsert => { /* Already the right operation */ }
+            Operation::Update => {
+                panic!(
+                    "cannot upsert a row after a scheduled update operation, update and upsert are exclusive - table: {} key: {}",
+                    table, key_debug,
+                )
+            }
+            Operation::Delete => {
+                panic!(
+                    "cannot upsert a row after a scheduled delete operation - table: {} key: {}",
                     table, key_debug,
                 )
             }
@@ -65,8 +120,9 @@ impl Tables {
             Operation::Unspecified => {
                 row.operation = Operation::Update;
             }
-            Operation::Create => {}
-            Operation::Update => {}
+            Operation::Create => { /* Fine, updated columns will be part of Insert operation */ }
+            Operation::Upsert => { /* Fine, updated columns will be part of Upsert operation */ }
+            Operation::Update => { /* Already the right operation */ }
             Operation::Delete => {
                 panic!(
                     "cannot update a row after a scheduled delete operation - table: {} key: {}",
@@ -80,22 +136,32 @@ impl Tables {
     pub fn delete_row<K: Into<PrimaryKey>>(&mut self, table: &str, key: PrimaryKey) -> &mut Row {
         let rows = self.tables.entry(table.to_string()).or_insert(Rows::new());
         let row = rows.pks.entry(key.into()).or_insert(Row::new());
-        match row.operation {
-            Operation::Unspecified => {
-                row.operation = Operation::Delete;
-            }
+
+        row.columns = HashMap::new();
+        row.operation = match row.operation {
+            Operation::Unspecified => Operation::Delete,
             Operation::Create => {
-                // simply clear the thing
-                row.operation = Operation::Unspecified;
-                row.columns = HashMap::new();
+                // We are creating the row in this block, there is no need to emit a DELETE statement,
+                // we specify Unspecified and the row will be skipped when comes the time to emit the
+                // changes.
+                Operation::Unspecified
+            }
+            Operation::Upsert => {
+                // We cannot know if the row was created within that block or already present
+                // in the database. As such, we must emit a DELETE statement in the sink
+                // for this. Worst case, the DELETE will hit no row and be a no-op.
+                Operation::Delete
             }
             Operation::Update => {
-                row.columns = HashMap::new();
+                // The row must be deleted, emit the operation
+                Operation::Delete
             }
-            Operation::Delete => {}
-        }
-        row.operation = Operation::Delete;
-        row.columns = HashMap::new();
+            Operation::Delete => {
+                // Already delete type, continue using that as the operation
+                Operation::Delete
+            }
+        };
+
         row
     }
 
@@ -203,6 +269,35 @@ impl Row {
         }
     }
 
+    /// Set a field to a value, this is the standard method for setting fields in a row.
+    ///
+    /// This method ensures that the value is converted to a database-compatible format
+    /// using the `ToDatabaseValue` trait. It is the primary way to set fields in a row
+    /// for most use cases.
+    ///
+    /// The `ToDatabaseValue` trait is implemented for various types, including primitive
+    /// types, strings, and custom types. This allows you to set fields with different
+    /// types of values without worrying about the underlying conversion. Check example
+    /// for more details.
+    ///
+    /// Check [ToDatabaseValue] for implemented automatic conversions.
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if called on a row marked for deletion.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use substreams::scalar::{BigInt, BigDecimal};
+    /// use crate::substreams_database_change::tables::Tables;
+    /// let mut tables = Tables::new();
+    /// let row = tables.create_row("myevent", "my_key");
+    /// row.set("name", "asset name");
+    /// row.set("decimals", 42);
+    /// row.set("count", BigDecimal::from(42));
+    /// row.set("value", BigInt::from(42));
+    /// ```
     pub fn set<T: ToDatabaseValue>(&mut self, name: &str, value: T) -> &mut Self {
         if self.operation == Operation::Delete {
             panic!("cannot set fields on a delete operation")
@@ -211,6 +306,11 @@ impl Row {
         self
     }
 
+    /// Set a field to a raw value, this is useful for setting values that are not
+    /// normalized across all databases. In there, you can put the raw value as you
+    /// would in a SQL statement of the database you are targeting.
+    ///
+    /// This will be pass as a string to the database which will interpret it itself.
     pub fn set_raw(&mut self, name: &str, value: String) -> &mut Self {
         self.columns.insert(name.to_string(), value);
         self

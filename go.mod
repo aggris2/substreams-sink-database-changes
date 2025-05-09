@@ -1,5 +1,5 @@
 module github.com/streamingfast/substreams-sink-database-changes
 
-go 1.19
+go 1.23
 
-require google.golang.org/protobuf v1.30.0
+require google.golang.org/protobuf v1.36.6

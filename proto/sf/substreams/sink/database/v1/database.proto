@@ -20,6 +20,14 @@ message TableChange {
     OPERATION_CREATE = 1;
     OPERATION_UPDATE = 2;
     OPERATION_DELETE = 3;
+
+    // The upsert might not be supported by all drivers the sink supports,
+    // refer to https://github.com/streamingfast/substreams-sink-sql for
+    // which drivers support it.
+    //
+    // At time of writing, the Postgres driver supports was the only one supporting
+    // it.
+    OPERATION_UPSERT = 4;
   }
   Operation operation = 4;
   repeated Field fields = 5;

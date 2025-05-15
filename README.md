@@ -25,31 +25,87 @@ cargo add substreams-database-change
 
 ```toml
 [dependencies]
-substreams = "0.5"
-substreams-database-change = "1.0"
+substreams = "0.6"
+substreams-database-change = "2.0"
 ```
 
 **src/lib.rs**
 
 ```rust
 use substreams::errors::Error;
-use substreams_database_change::pb::database::{DatabaseChanges, table_change::Operation};
+use substreams_database_change::tables::Tables;
+use substreams_database_change::pb::database::DatabaseChanges;
 
 #[substreams::handlers::map]
 fn db_out(
     ... some stores ...
 ) -> Result<DatabaseChanges, Error> {
-    // Initialize Database Changes container
-    let mut database_changes: DatabaseChanges = Default::default();
+    let mut tables = Tables::new();
 
-    // Push change
-    database_changes.push_change("transfer", "primary-key", 0, Operation::Create)
-        .change("key1", ("previous1", "value1"))
-        .change("key2", ("previous2", "value2"));
+    // Create a row and set fields
+    tables
+        .create_row("transfer", "some-id")
+        .set("key1", "value1")
+        .set("key2", "value2");
 
-    Ok(database_changes)
+    // Update a row (for example, change key2)
+    tables
+        .update_row("transfer", "some-id")
+        .set("key2", "new_value2");
+
+    Ok(tables.to_database_changes())
 }
 ```
+
+### Reference
+
+#### Table Operations
+
+- **Create a row**
+  ```rust
+  tables.create_row("table_name", "primary_key")
+      .set("field", "value");
+  ```
+  Creates a new row. Panics if the row is already scheduled for upsert, update, or delete.
+
+- **Upsert a row**
+  ```rust
+  tables.upsert_row("table_name", "primary_key")
+      .set("field", "value");
+  ```
+  Schedules an insert or update (upsert) for the row. Panics if the row is already scheduled for create, update, or delete.
+
+- **Update a row**
+  ```rust
+  tables.update_row("table_name", "primary_key")
+      .set("field", "new_value");
+  ```
+  Schedules an update for the row. Panics if the row is already scheduled for delete.
+
+- **Delete a row**
+  ```rust
+  tables.delete_row("table_name", "primary_key");
+  ```
+  Schedules a delete for the row. Clears any previously set fields.
+
+All methods support both single and composite primary keys:
+```rust
+tables.create_row("table", [("key1", "v1".to_string()), ("key2", "v2".to_string())]);
+```
+
+#### Automatic Type Transformations
+
+The `.set()` method automatically converts many Rust types to database-compatible strings, including:
+- Integers: `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`
+- `bool`
+- `String`, `&str`
+- `BigInt`, `BigDecimal` (from `substreams::scalar`)
+- `prost_types::Timestamp`
+- `Vec<u8>`, `Hex<T>` (as hex strings)
+
+Custom types can implement the `ToDatabaseValue` trait for custom conversion.
+
+For advanced use, `.set_raw()` allows setting a field to a raw string value.
 
 ### Re-generate Protobuf
 

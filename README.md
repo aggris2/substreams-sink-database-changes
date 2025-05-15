@@ -7,10 +7,9 @@
 
 > `substreams-sink-database-changes` contains all the definitions for database changes which can be emitted by a substream.
 
-## Used by
+## To be consumed by
 
-- [substreams-sink-postgres](https://github.com/streamingfast/substreams-sink-postgres)
-- [substreams-sink-mongodb](https://github.com/streamingfast/substreams-sink-mongodb)
+- [substreams-sink-sql](https://github.com/streamingfast/substreams-sink-sql)
 
 ## Install
 

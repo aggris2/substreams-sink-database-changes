@@ -1,5 +1,23 @@
 ## Release Process
 
+#### Easy steps
+
+```bash
+# Update to correct version!
+export version=0.1.3
+
+find . -type f -name Cargo.toml -not -path "./target/*" | xargs -n1 sd '^version = "[^"]+"' "version = \"${version}\""
+sd '## Unreleased' "## v{version}" CHANGELOG.md
+sd 'version: v.*' "version: v${version}" substreams.yaml
+
+# Needed so that Cargo.lock is correctly updated and to ensure every is ok
+cargo test --target aarch64-apple-darwin # Use your correct platform
+
+git add -A . && git commit -m "Preparing release of ${version}"
+
+sfreleaser release v${version}
+```
+
 ### Instructions
 
 > **Warning** Do not forget to replace `${version}` by your real version like `0.1.3` in the commands below!  (`export version=0.1.3`)
@@ -30,19 +48,3 @@ You will need [sfreleaser](https://github.com/streamingfast/sfreleaser) (install
   sfreleaser release
   ```
 
-#### Easy script
-
-```bash
-# Update to correct version!
-export version=0.1.3
-
-find . -type f -name Cargo.toml -not -path "./target/*" | xargs -n1 sd '^version = "[^"]+"' "version = \"${version}\""
-sd '## Unreleased' "## v{version}" CHANGELOG.md
-sd 'version: v.*' "version: v${version}" substreams.yaml
-
-cargo check
-
-git add -A . && git commit -m "Preparing release of ${version}"
-
-sfreleaser release v${version}
-```

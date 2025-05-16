@@ -2,7 +2,12 @@ global:
   language: rust
   variant: library
 release:
-  upload-substreams-spkg: substreams.yaml
+  pre-build-hooks:
+    - substreams pack -o "{{ .buildDir }}/substreams-sink-database-changes-{{ .release.Version }}.spkg" substreams.yaml
+  upload-extra-assets:
+    - "{{ .buildDir }}/substreams-sink-database-changes-{{ .release.Version }}.spkg"
   # Must be specified in publish order
   rust-crates:
+  # Due to historic reasons, we publish the crate using substreams-database-change so
+  # we must keep it as-is for backwards compatibility on the crates.io
   - substreams-database-change

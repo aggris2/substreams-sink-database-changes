@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0]
+
+* Added support for `upsert_row` in the `Tables` abstraction, allowing upsert (insert or update) operations on rows. This requires a development version of `substreams-sink-sql` to operate correctly.
+
+  For usage and reference, see the [Table Operations](README.md#table-operations) section in the documentation.
+
 ## [2.0.0]
 
 * Bumped dependencies to `substreams` to 0.6 and `prost` to 0.13 (see [Upgrade notes](https://github.com/streamingfast/substreams-rs/releases/tag/v0.6.0))

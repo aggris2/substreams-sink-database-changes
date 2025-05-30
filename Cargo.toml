@@ -15,3 +15,6 @@ categories = ["api-bindings", "external-ffi-bindings", "wasm"]
 prost = "0.13"
 prost-types = "0.13"
 substreams = "0.6"
+
+[dev-dependencies]
+pretty_assertions = "1.4"

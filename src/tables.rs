@@ -9,13 +9,23 @@ use substreams::{
 pub struct Tables {
     // Map from table name to the primary keys within that table
     pub tables: HashMap<String, Rows>,
+
+    // Ordinal is used to track the order of changes, it is incremented for each row
+    // in such way that at the end, we can correctly order the changes back correctly.
+    ordinal: Ordinal,
 }
 
 impl Tables {
     pub fn new() -> Self {
         Tables {
             tables: HashMap::new(),
+            ordinal: Ordinal::new(),
         }
+    }
+
+    /// Returns the number of rows in all tables.
+    pub fn all_row_count(&self) -> usize {
+        self.tables.values().map(|rows| rows.pks.len()).sum()
     }
 
     /// Create a new row in the table with the given primary key.
@@ -34,10 +44,13 @@ impl Tables {
     /// tables.create_row("myevent", [("evt_tx_hash", String::from("hello")), ("evt_index", String::from("world"))]);
     /// ```
     pub fn create_row<K: Into<PrimaryKey>>(&mut self, table: &str, key: K) -> &mut Row {
-        let rows = self.tables.entry(table.to_string()).or_insert(Rows::new());
+        let rows: &mut Rows = self.tables.entry(table.to_string()).or_insert(Rows::new());
         let k = key.into();
         let key_debug = format!("{:?}", k);
-        let row = rows.pks.entry(k).or_insert(Row::new());
+        let row = rows
+            .pks
+            .entry(k)
+            .or_insert(Row::new_ordered(self.ordinal.next()));
         match row.operation {
             Operation::Unspecified => {
                 row.operation = Operation::Create;
@@ -83,7 +96,10 @@ impl Tables {
         let rows = self.tables.entry(table.to_string()).or_insert(Rows::new());
         let k = key.into();
         let key_debug = format!("{:?}", k);
-        let row = rows.pks.entry(k).or_insert(Row::new());
+        let row = rows
+            .pks
+            .entry(k)
+            .or_insert(Row::new_ordered(self.ordinal.next()));
         match row.operation {
             Operation::Unspecified => {
                 row.operation = Operation::Upsert;
@@ -115,7 +131,10 @@ impl Tables {
         let rows = self.tables.entry(table.to_string()).or_insert(Rows::new());
         let k = key.into();
         let key_debug = format!("{:?}", k);
-        let row = rows.pks.entry(k).or_insert(Row::new());
+        let row = rows
+            .pks
+            .entry(k)
+            .or_insert(Row::new_ordered(self.ordinal.next()));
         match row.operation {
             Operation::Unspecified => {
                 row.operation = Operation::Update;
@@ -135,7 +154,10 @@ impl Tables {
 
     pub fn delete_row<K: Into<PrimaryKey>>(&mut self, table: &str, key: PrimaryKey) -> &mut Row {
         let rows = self.tables.entry(table.to_string()).or_insert(Rows::new());
-        let row = rows.pks.entry(key.into()).or_insert(Row::new());
+        let row = rows
+            .pks
+            .entry(key.into())
+            .or_insert(Row::new_ordered(self.ordinal.next()));
 
         row.columns = HashMap::new();
         row.operation = match row.operation {
@@ -176,11 +198,13 @@ impl Tables {
                 }
 
                 let mut change = match pk {
-                    PrimaryKey::Single(pk) => TableChange::new(table.clone(), pk, 0, row.operation),
+                    PrimaryKey::Single(pk) => {
+                        TableChange::new(table.clone(), pk, row.ordinal, row.operation)
+                    }
                     PrimaryKey::Composite(keys) => TableChange::new_composite(
                         table.clone(),
                         keys.into_iter().collect(),
-                        0,
+                        row.ordinal,
                         row.operation,
                     ),
                 };
@@ -197,7 +221,23 @@ impl Tables {
             }
         }
 
+        changes.table_changes.sort_by_key(|change| change.ordinal);
         changes
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Ordinal(u64);
+
+impl Ordinal {
+    pub fn new() -> Self {
+        Ordinal(0)
+    }
+
+    pub fn next(&mut self) -> u64 {
+        let current = self.0;
+        self.0 += 1;
+        current
     }
 }
 
@@ -236,6 +276,17 @@ impl<K: AsRef<str>, const N: usize> From<[(K, String); N]> for PrimaryKey {
     }
 }
 
+impl<K: AsRef<str>, const N: usize> From<[(K, &str); N]> for PrimaryKey {
+    fn from(arr: [(K, &str); N]) -> Self {
+        if N == 0 {
+            return Self::Composite(BTreeMap::new());
+        }
+
+        let string_arr = arr.map(|(k, v)| (k.as_ref().to_string(), v.to_string()));
+        Self::Composite(BTreeMap::from(string_arr))
+    }
+}
+
 #[derive(Debug)]
 pub struct Rows {
     // Map of primary keys within this table, to the fields within
@@ -250,22 +301,41 @@ impl Rows {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Row {
-    // Verify that we don't try to delete the same row as we're creating it
+    /// Verify that we don't try to delete the same row as we're creating it
     pub operation: Operation,
-    // Map of field name to its last change
+    /// Map of field name to its last change
     pub columns: HashMap<String, String>,
-    // Finalized: Last update or delete
+    /// Finalized: Last update or delete
+    #[deprecated(
+        note = "The finalization state is now implicitly handled by the `operation` field."
+    )]
     pub finalized: bool,
+
+    ordinal: u64,
 }
 
 impl Row {
+    /// **Do not use** Now broken, use the `Tables` API instead like `create_row`, `upsert_row`, `update_row`, or `delete_row`.
+    /// Kept for code compilation but it's expected that this was never used in practice.
+    #[deprecated(
+        note = "Do now create a new row manually, use the `Tables` API instead like `create_row`, `upsert_row`, `update_row`, or `delete_row`"
+    )]
     pub fn new() -> Self {
         Row {
             operation: Operation::Unspecified,
             columns: HashMap::new(),
-            finalized: false,
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn new_ordered(ordinal: u64) -> Self {
+        Row {
+            operation: Operation::Unspecified,
+            columns: HashMap::new(),
+            ordinal,
+            ..Default::default()
         }
     }
 
@@ -442,13 +512,13 @@ impl<T: AsRef<[u8]>> ToDatabaseValue for &Hex<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::pb::database::table_change::PrimaryKey;
-    use crate::pb::database::CompositePrimaryKey;
+    use crate::pb::database::table_change::PrimaryKey as PrimaryKeyProto;
+    use crate::pb::database::CompositePrimaryKey as CompositePrimaryKeyProto;
     use crate::pb::database::{DatabaseChanges, TableChange};
-    use crate::tables::PrimaryKey as TablesPrimaryKey;
+    use crate::tables::PrimaryKey;
     use crate::tables::Tables;
     use crate::tables::ToDatabaseValue;
-    use std::collections::HashMap;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn to_database_value_proto_timestamp() {
@@ -464,19 +534,12 @@ mod test {
     #[test]
     fn create_row_single_pk_direct() {
         let mut tables = Tables::new();
-        tables.create_row("myevent", TablesPrimaryKey::Single("myhash".to_string()));
+        tables.create_row("myevent", PrimaryKey::Single("myhash".to_string()));
 
         assert_eq!(
             tables.to_database_changes(),
             DatabaseChanges {
-                table_changes: [TableChange {
-                    table: "myevent".to_string(),
-                    ordinal: 0,
-                    operation: 1,
-                    fields: [].into(),
-                    primary_key: Some(PrimaryKey::Pk("myhash".to_string())),
-                }]
-                .to_vec(),
+                table_changes: [change("myevent", "myhash", 0)].to_vec(),
             }
         );
     }
@@ -489,14 +552,7 @@ mod test {
         assert_eq!(
             tables.to_database_changes(),
             DatabaseChanges {
-                table_changes: [TableChange {
-                    table: "myevent".to_string(),
-                    ordinal: 0,
-                    operation: 1,
-                    fields: [].into(),
-                    primary_key: Some(PrimaryKey::Pk("myhash".to_string())),
-                }]
-                .to_vec(),
+                table_changes: [change("myevent", "myhash", 0)].to_vec(),
             }
         );
     }
@@ -506,29 +562,62 @@ mod test {
         let mut tables = Tables::new();
         tables.create_row(
             "myevent",
-            [
-                ("evt_tx_hash", "hello".to_string()),
-                ("evt_index", "world".to_string()),
-            ],
+            [("evt_tx_hash", "hello"), ("evt_index", "world")],
         );
 
         assert_eq!(
             tables.to_database_changes(),
             DatabaseChanges {
-                table_changes: [TableChange {
-                    table: "myevent".to_string(),
-                    ordinal: 0,
-                    operation: 1,
-                    fields: [].into(),
-                    primary_key: Some(PrimaryKey::CompositePk(CompositePrimaryKey {
-                        keys: HashMap::from([
-                            ("evt_tx_hash".to_string(), "hello".to_string()),
-                            ("evt_index".to_string(), "world".to_string())
-                        ])
-                    }))
-                }]
+                table_changes: [change(
+                    "myevent",
+                    [("evt_tx_hash", "hello"), ("evt_index", "world")],
+                    0
+                )]
+                .to_vec()
+            }
+        );
+    }
+
+    #[test]
+    fn row_ordering() {
+        let mut tables = Tables::new();
+        tables.create_row("tableA", "one");
+        tables.create_row("tableC", "two");
+        tables.create_row("tableA", "three");
+        tables.create_row("tableD", "four");
+        tables.create_row("tableE", "five");
+        tables.create_row("tableC", "six");
+
+        assert_eq!(
+            tables.to_database_changes(),
+            DatabaseChanges {
+                table_changes: [
+                    change("tableA", "one", 0),
+                    change("tableC", "two", 1),
+                    change("tableA", "three", 2),
+                    change("tableD", "four", 3),
+                    change("tableE", "five", 4),
+                    change("tableC", "six", 5)
+                ]
                 .to_vec(),
             }
         );
+    }
+
+    fn change<K: Into<PrimaryKey>>(name: &str, key: K, ordinal: u64) -> TableChange {
+        TableChange {
+            table: name.to_string(),
+            ordinal,
+            operation: 1,
+            fields: [].into(),
+            primary_key: Some(match key.into() {
+                PrimaryKey::Single(pk) => PrimaryKeyProto::Pk(pk),
+                PrimaryKey::Composite(keys) => {
+                    PrimaryKeyProto::CompositePk(CompositePrimaryKeyProto {
+                        keys: keys.into_iter().collect(),
+                    })
+                }
+            }),
+        }
     }
 }

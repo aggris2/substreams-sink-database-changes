@@ -113,3 +113,11 @@ Be sure to have `buf` CLI installed (https://buf.build/docs/installation/) and r
 ```bash
 buf generate proto
 ```
+
+## Release
+
+```bash
+sfreleaser release
+```
+
+Follow instructions the CLI is asking, the process is now automatic and version bump and Substreams package building is now all done automatically.

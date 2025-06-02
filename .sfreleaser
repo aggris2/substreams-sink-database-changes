@@ -3,9 +3,10 @@ global:
   variant: library
 release:
   pre-build-hooks:
-    - substreams pack -o "{{ .buildDir }}/substreams-sink-database-changes-{{ .release.Version }}.spkg" substreams.yaml
+    - ./.sfreleaser.pre-release.sh "{{ .release.Version }}"
+    - substreams pack -o "{{ .buildDir }}/{{ .global.Project }}-{{ .release.Version }}.spkg" substreams.yaml
   upload-extra-assets:
-    - "{{ .buildDir }}/substreams-sink-database-changes-{{ .release.Version }}.spkg"
+    - "{{ .buildDir }}/{{ .global.Project }}-{{ .release.Version }}.spkg"
   # Must be specified in publish order
   rust-crates:
   # Due to historic reasons, we publish the crate using substreams-database-change so

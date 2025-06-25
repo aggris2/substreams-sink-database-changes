@@ -152,7 +152,7 @@ impl Tables {
         row
     }
 
-    pub fn delete_row<K: Into<PrimaryKey>>(&mut self, table: &str, key: PrimaryKey) -> &mut Row {
+    pub fn delete_row<K: Into<PrimaryKey>>(&mut self, table: &str, key: K) -> &mut Row {
         let rows = self.tables.entry(table.to_string()).or_insert(Rows::new());
         let row = rows
             .pks

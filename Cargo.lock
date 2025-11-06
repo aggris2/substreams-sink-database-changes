@@ -474,9 +474,9 @@ dependencies = [
 
 [[package]]
 name = "substreams"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bb63116b90d4c174114fb237a8916dd995c939874f7576333990a44d78b642a"
+checksum = "72f4b73d245d760af8ba1d2ddab91780cb2e65414c3396ba7c9764a6f025c4a4"
 dependencies = [
  "anyhow",
  "bigdecimal",
@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "substreams-database-change"
-version = "2.1.2"
+version = "3.0.0"
 dependencies = [
  "pretty_assertions",
  "prost",
@@ -507,9 +507,9 @@ dependencies = [
 
 [[package]]
 name = "substreams-macro"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f36f36e9da94db29f49daf3ab6b47b529b57c43fc5d58bc35b160aaad1a7233f"
+checksum = "d13adb6281069af403be11e7c93ef0026250cc2692387446e4bc1cecda7a6e1d"
 dependencies = [
  "proc-macro2",
  "quote",

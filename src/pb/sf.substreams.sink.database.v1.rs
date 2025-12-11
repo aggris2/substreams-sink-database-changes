@@ -36,6 +36,10 @@ pub mod table_change {
         /// At time of writing, the Postgres driver supports was the only one supporting
         /// it.
         Upsert = 4,
+        /// Delta upsert: field values are deltas to add to existing values.
+        /// new_value = COALESCE(existing_value, 0) + delta
+        /// Useful for balance/counter tracking without querying existing values.
+        DeltaUpsert = 5,
     }
     impl Operation {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -49,6 +53,7 @@ pub mod table_change {
                 Operation::Update => "OPERATION_UPDATE",
                 Operation::Delete => "OPERATION_DELETE",
                 Operation::Upsert => "OPERATION_UPSERT",
+                Operation::DeltaUpsert => "OPERATION_DELTA_UPSERT",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -59,6 +64,7 @@ pub mod table_change {
                 "OPERATION_UPDATE" => Some(Self::Update),
                 "OPERATION_DELETE" => Some(Self::Delete),
                 "OPERATION_UPSERT" => Some(Self::Upsert),
+                "OPERATION_DELTA_UPSERT" => Some(Self::DeltaUpsert),
                 _ => None,
             }
         }

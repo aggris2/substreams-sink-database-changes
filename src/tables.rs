@@ -62,6 +62,12 @@ impl Tables {
                     table, key_debug,
                 )
             }
+            Operation::DeltaUpsert => {
+                panic!(
+                    "cannot create a row after a scheduled delta_upsert operation - table: {} key: {}",
+                    table, key_debug,
+                )
+            }
             Operation::Update => {
                 panic!("cannot create a row that was marked for update")
             }
@@ -111,6 +117,12 @@ impl Tables {
                 )
             }
             Operation::Upsert => { /* Already the right operation */ }
+            Operation::DeltaUpsert => {
+                panic!(
+                    "cannot upsert a row after a scheduled delta_upsert operation - table: {} key: {}",
+                    table, key_debug,
+                )
+            }
             Operation::Update => {
                 panic!(
                     "cannot upsert a row after a scheduled update operation, update and upsert are exclusive - table: {} key: {}",
@@ -120,6 +132,64 @@ impl Tables {
             Operation::Delete => {
                 panic!(
                     "cannot upsert a row after a scheduled delete operation - table: {} key: {}",
+                    table, key_debug,
+                )
+            }
+        }
+        row
+    }
+
+    /// Delta upsert a row - field values are deltas to add/subtract from existing values.
+    ///
+    /// The database will compute: new_value = COALESCE(existing_value, 0) +/- delta
+    /// Use `delta_add()` or `delta_sub()` methods on the returned Row to set delta fields.
+    ///
+    /// *Note* Ensure that the SQL sink driver you use supports delta upsert operations.
+    ///
+    /// ```
+    /// use crate::substreams_database_change::tables::Tables;
+    /// let mut tables = Tables::new();
+    /// // Add 100 to balance (or set to 100 if row doesn't exist)
+    /// tables.delta_upsert_row("token_holders", [("token", "0x123"), ("holder", "0x456")])
+    ///     .delta_add("balance", "100");
+    /// // Subtract 50 from balance
+    /// tables.delta_upsert_row("token_holders", [("token", "0x123"), ("holder", "0x789")])
+    ///     .delta_sub("balance", "50");
+    /// ```
+    pub fn delta_upsert_row<K: Into<PrimaryKey>>(&mut self, table: &str, key: K) -> &mut Row {
+        let rows = self.tables.entry(table.to_string()).or_insert(Rows::new());
+        let k = key.into();
+        let key_debug = format!("{:?}", k);
+        let row = rows
+            .pks
+            .entry(k)
+            .or_insert(Row::new_ordered(self.ordinal.next()));
+        match row.operation {
+            Operation::Unspecified => {
+                row.operation = Operation::DeltaUpsert;
+            }
+            Operation::Create => {
+                panic!(
+                    "cannot delta_upsert a row after a scheduled create operation - table: {} key: {}",
+                    table, key_debug,
+                )
+            }
+            Operation::Upsert => {
+                panic!(
+                    "cannot delta_upsert a row after a scheduled upsert operation - table: {} key: {}",
+                    table, key_debug,
+                )
+            }
+            Operation::DeltaUpsert => { /* Already the right operation */ }
+            Operation::Update => {
+                panic!(
+                    "cannot delta_upsert a row after a scheduled update operation - table: {} key: {}",
+                    table, key_debug,
+                )
+            }
+            Operation::Delete => {
+                panic!(
+                    "cannot delta_upsert a row after a scheduled delete operation - table: {} key: {}",
                     table, key_debug,
                 )
             }
@@ -141,6 +211,7 @@ impl Tables {
             }
             Operation::Create => { /* Fine, updated columns will be part of Insert operation */ }
             Operation::Upsert => { /* Fine, updated columns will be part of Upsert operation */ }
+            Operation::DeltaUpsert => { /* Fine, updated columns will be part of DeltaUpsert operation */ }
             Operation::Update => { /* Already the right operation */ }
             Operation::Delete => {
                 panic!(
@@ -172,6 +243,10 @@ impl Tables {
                 // We cannot know if the row was created within that block or already present
                 // in the database. As such, we must emit a DELETE statement in the sink
                 // for this. Worst case, the DELETE will hit no row and be a no-op.
+                Operation::Delete
+            }
+            Operation::DeltaUpsert => {
+                // Same as Upsert - we must emit a DELETE statement
                 Operation::Delete
             }
             Operation::Update => {
@@ -374,6 +449,74 @@ impl Row {
         }
         self.columns.insert(name.to_string(), value.to_value());
         self
+    }
+
+    /// Set a delta field to ADD the value to the existing value.
+    /// Used with `delta_upsert_row()`. The database will compute:
+    /// col = COALESCE(col, 0) + value
+    ///
+    /// If called multiple times for the same column, values are accumulated.
+    pub fn delta_add<T: ToDatabaseValue>(&mut self, name: &str, value: T) -> &mut Self {
+        if self.operation == Operation::Delete {
+            panic!("cannot set fields on a delete operation")
+        }
+        let new_value = value.to_value();
+        self.accumulate_delta(name, &new_value, false);
+        self
+    }
+
+    /// Set a delta field to SUBTRACT the value from the existing value.
+    /// Used with `delta_upsert_row()`. The database will compute:
+    /// col = COALESCE(col, 0) + value (where value is negated)
+    ///
+    /// If called multiple times for the same column, values are accumulated.
+    pub fn delta_sub<T: ToDatabaseValue>(&mut self, name: &str, value: T) -> &mut Self {
+        if self.operation == Operation::Delete {
+            panic!("cannot set fields on a delete operation")
+        }
+        let new_value = value.to_value();
+        self.accumulate_delta(name, &new_value, true);
+        self
+    }
+
+    /// Internal helper to accumulate delta values for the same column
+    fn accumulate_delta(&mut self, name: &str, value: &str, negate: bool) {
+        use std::str::FromStr;
+
+        // Prepare the value string (with or without negation)
+        let value_str = if negate {
+            // Handle negation via string: if starts with -, remove it; else prepend -
+            if value.starts_with('-') {
+                value[1..].to_string()
+            } else {
+                format!("-{}", value)
+            }
+        } else {
+            value.to_string()
+        };
+
+        // Parse the new value
+        let new_decimal = match BigDecimal::from_str(&value_str) {
+            Ok(d) => d,
+            Err(_) => {
+                // Not a valid decimal, just set directly
+                self.columns.insert(name.to_string(), value_str);
+                return;
+            }
+        };
+
+        // Check if column already has a value
+        if let Some(existing) = self.columns.get(name) {
+            if let Ok(existing_decimal) = BigDecimal::from_str(existing) {
+                // Accumulate: add the new value to existing
+                let result = existing_decimal + new_decimal;
+                self.columns.insert(name.to_string(), result.to_string());
+                return;
+            }
+        }
+
+        // No existing value or couldn't parse, just set
+        self.columns.insert(name.to_string(), new_decimal.to_string());
     }
 
     /// Set a field to a raw value, this is useful for setting values that are not

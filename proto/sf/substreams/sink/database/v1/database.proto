@@ -28,6 +28,11 @@ message TableChange {
     // At time of writing, the Postgres driver supports was the only one supporting
     // it.
     OPERATION_UPSERT = 4;
+
+    // Delta upsert: field values are deltas to add to existing values.
+    // new_value = COALESCE(existing_value, 0) + delta
+    // Useful for balance/counter tracking without querying existing values.
+    OPERATION_DELTA_UPSERT = 5;
   }
   Operation operation = 4;
   repeated Field fields = 5;

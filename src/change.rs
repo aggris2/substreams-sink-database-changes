@@ -76,6 +76,7 @@ impl<T: AsString> ToField for (T, T) {
             name: name.as_ref().to_string(),
             old_value: self.0.as_string(),
             new_value: self.1.as_string(),
+            update_op: 0, // UpdateOp::Set
         }
     }
 }
@@ -88,6 +89,7 @@ impl<T: AsString> ToField for (Option<T>, T) {
                 name: name.as_ref().to_string(),
                 old_value: "".to_string(),
                 new_value: new.as_string(),
+                update_op: 0, // UpdateOp::Set
             },
         }
     }
@@ -101,6 +103,7 @@ impl<T: AsString> ToField for (T, Option<T>) {
                 name: name.as_ref().to_string(),
                 old_value: old.as_string(),
                 new_value: "".to_string(),
+                update_op: 0, // UpdateOp::Set
             },
         }
     }

@@ -501,10 +501,19 @@ impl Row {
         if self.operation == Operation::Delete {
             panic!("cannot set fields on a delete operation")
         }
-        // Check for invalid transitions
+        let new_value = value.to_value();
+        // Check for invalid transitions and compute maximum if there's an existing value
         if let Some(existing) = self.columns.get(name) {
             match existing.update_op {
-                UpdateOp::Set | UpdateOp::Max => {} // Valid transitions
+                UpdateOp::Set | UpdateOp::Max => {
+                    // Compute the maximum of existing and new values
+                    if let (Ok(existing_num), Ok(new_num)) = (existing.value.parse::<f64>(), new_value.parse::<f64>()) {
+                        let max_val = if new_num > existing_num { new_value } else { existing.value.clone() };
+                        self.columns.insert(name.to_string(), FieldValue::with_op(max_val, UpdateOp::Max));
+                        return self;
+                    }
+                    // If parsing fails, fall through to just insert the new value
+                }
                 UpdateOp::Add => panic!(
                     "cannot call max() on field '{}' after add/sub() - incompatible operations",
                     name
@@ -519,7 +528,7 @@ impl Row {
                 ),
             }
         }
-        self.columns.insert(name.to_string(), FieldValue::with_op(value.to_value(), UpdateOp::Max));
+        self.columns.insert(name.to_string(), FieldValue::with_op(new_value, UpdateOp::Max));
         self
     }
 
@@ -530,10 +539,19 @@ impl Row {
         if self.operation == Operation::Delete {
             panic!("cannot set fields on a delete operation")
         }
-        // Check for invalid transitions
+        let new_value = value.to_value();
+        // Check for invalid transitions and compute minimum if there's an existing value
         if let Some(existing) = self.columns.get(name) {
             match existing.update_op {
-                UpdateOp::Set | UpdateOp::Min => {} // Valid transitions
+                UpdateOp::Set | UpdateOp::Min => {
+                    // Compute the minimum of existing and new values
+                    if let (Ok(existing_num), Ok(new_num)) = (existing.value.parse::<f64>(), new_value.parse::<f64>()) {
+                        let min_val = if new_num < existing_num { new_value } else { existing.value.clone() };
+                        self.columns.insert(name.to_string(), FieldValue::with_op(min_val, UpdateOp::Min));
+                        return self;
+                    }
+                    // If parsing fails, fall through to just insert the new value
+                }
                 UpdateOp::Add => panic!(
                     "cannot call min() on field '{}' after add/sub() - incompatible operations",
                     name
@@ -548,7 +566,7 @@ impl Row {
                 ),
             }
         }
-        self.columns.insert(name.to_string(), FieldValue::with_op(value.to_value(), UpdateOp::Min));
+        self.columns.insert(name.to_string(), FieldValue::with_op(new_value, UpdateOp::Min));
         self
     }
 
@@ -1162,24 +1180,52 @@ mod update_op_tests {
     // ============================================================
 
     #[test]
-    fn set_then_max_allowed() {
+    fn set_then_max_computes_maximum() {
         let mut tables = Tables::new();
         let row = tables.upsert_row("test", "pk1");
         row.set("price", "100");
         row.max("price", "50");
 
+        // max() computes max(100, 50) = 100
         let field = row.columns.get("price").unwrap();
-        assert_eq!(field.value, "50");
+        assert_eq!(field.value, "100");
         assert_eq!(field.update_op, UpdateOp::Max);
     }
 
     #[test]
-    fn set_then_min_allowed() {
+    fn set_then_max_updates_when_new_is_greater() {
+        let mut tables = Tables::new();
+        let row = tables.upsert_row("test", "pk1");
+        row.set("price", "50");
+        row.max("price", "100");
+
+        // max() computes max(50, 100) = 100
+        let field = row.columns.get("price").unwrap();
+        assert_eq!(field.value, "100");
+        assert_eq!(field.update_op, UpdateOp::Max);
+    }
+
+    #[test]
+    fn set_then_min_computes_minimum() {
         let mut tables = Tables::new();
         let row = tables.upsert_row("test", "pk1");
         row.set("price", "100");
         row.min("price", "50");
 
+        // min() computes min(100, 50) = 50
+        let field = row.columns.get("price").unwrap();
+        assert_eq!(field.value, "50");
+        assert_eq!(field.update_op, UpdateOp::Min);
+    }
+
+    #[test]
+    fn set_then_min_keeps_existing_when_smaller() {
+        let mut tables = Tables::new();
+        let row = tables.upsert_row("test", "pk1");
+        row.set("price", "50");
+        row.min("price", "100");
+
+        // min() computes min(50, 100) = 50
         let field = row.columns.get("price").unwrap();
         assert_eq!(field.value, "50");
         assert_eq!(field.update_op, UpdateOp::Min);
@@ -1235,15 +1281,27 @@ mod update_op_tests {
     }
 
     #[test]
-    fn max_overwrites_not_accumulates() {
+    fn max_computes_maximum_value() {
         let mut tables = Tables::new();
         let row = tables.upsert_row("test", "pk1");
         row.max("high_price", "100");
         row.max("high_price", "50");
 
-        // max() just overwrites in database-changes, sink handles the GREATEST logic
+        // max() now computes the actual maximum in database-changes
         let field = row.columns.get("high_price").unwrap();
-        assert_eq!(field.value, "50");
+        assert_eq!(field.value, "100"); // Keeps 100 since it's greater than 50
+        assert_eq!(field.update_op, UpdateOp::Max);
+    }
+
+    #[test]
+    fn max_updates_when_new_value_is_greater() {
+        let mut tables = Tables::new();
+        let row = tables.upsert_row("test", "pk1");
+        row.max("high_price", "50");
+        row.max("high_price", "100");
+
+        let field = row.columns.get("high_price").unwrap();
+        assert_eq!(field.value, "100"); // Updates to 100 since it's greater than 50
         assert_eq!(field.update_op, UpdateOp::Max);
     }
 
@@ -1263,15 +1321,27 @@ mod update_op_tests {
     }
 
     #[test]
-    fn min_overwrites_not_accumulates() {
+    fn min_computes_minimum_value() {
         let mut tables = Tables::new();
         let row = tables.upsert_row("test", "pk1");
         row.min("low_price", "50");
         row.min("low_price", "100");
 
-        // min() just overwrites in database-changes, sink handles the LEAST logic
+        // min() now computes the actual minimum in database-changes
         let field = row.columns.get("low_price").unwrap();
-        assert_eq!(field.value, "100");
+        assert_eq!(field.value, "50"); // Keeps 50 since it's less than 100
+        assert_eq!(field.update_op, UpdateOp::Min);
+    }
+
+    #[test]
+    fn min_updates_when_new_value_is_smaller() {
+        let mut tables = Tables::new();
+        let row = tables.upsert_row("test", "pk1");
+        row.min("low_price", "100");
+        row.min("low_price", "50");
+
+        let field = row.columns.get("low_price").unwrap();
+        assert_eq!(field.value, "50"); // Updates to 50 since it's less than 100
         assert_eq!(field.update_op, UpdateOp::Min);
     }
 

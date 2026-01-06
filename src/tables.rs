@@ -572,7 +572,8 @@ impl Row {
 
     /// Set only if column is null: column = COALESCE(column, new_value)
     /// Used with upsert_row() for setting initial values that should not be overwritten.
-    /// Can only follow set() or another set_if_null() call on the same field.
+    /// When called multiple times, the FIRST value is kept (subsequent calls are no-ops).
+    /// Cannot be mixed with other operations on the same field.
     pub fn set_if_null<T: ToDatabaseValue>(&mut self, name: &str, value: T) -> &mut Self {
         if self.operation == Operation::Delete {
             panic!("cannot set fields on a delete operation")
@@ -580,7 +581,11 @@ impl Row {
         // Check for invalid transitions
         if let Some(existing) = self.columns.get(name) {
             match existing.update_op {
-                UpdateOp::Set | UpdateOp::SetIfNull => {} // Valid transitions
+                UpdateOp::SetIfNull => return self, // Keep first value - subsequent calls are no-op
+                UpdateOp::Set => panic!(
+                    "cannot call set_if_null() on field '{}' after set() - incompatible operations",
+                    name
+                ),
                 UpdateOp::Add => panic!(
                     "cannot call set_if_null() on field '{}' after add/sub() - incompatible operations",
                     name
@@ -1232,15 +1237,12 @@ mod update_op_tests {
     }
 
     #[test]
-    fn set_then_set_if_null_allowed() {
+    #[should_panic(expected = "cannot call set_if_null() on field 'created' after set()")]
+    fn set_then_set_if_null_panics() {
         let mut tables = Tables::new();
         let row = tables.upsert_row("test", "pk1");
         row.set("created", "2024-01-01");
-        row.set_if_null("created", "2024-02-01");
-
-        let field = row.columns.get("created").unwrap();
-        assert_eq!(field.value, "2024-02-01");
-        assert_eq!(field.update_op, UpdateOp::SetIfNull);
+        row.set_if_null("created", "2024-02-01"); // Should panic
     }
 
     // ============================================================
@@ -1361,16 +1363,15 @@ mod update_op_tests {
     }
 
     #[test]
-    fn set_if_null_overwrites_previous() {
+    fn set_if_null_keeps_first_value() {
         let mut tables = Tables::new();
         let row = tables.upsert_row("test", "pk1");
         row.set_if_null("created_at", "2024-01-01");
         row.set_if_null("created_at", "2024-02-01");
 
-        // In database-changes, it just stores the last value
-        // The sink handles the COALESCE logic
+        // set_if_null keeps the first value - subsequent calls are no-ops
         let field = row.columns.get("created_at").unwrap();
-        assert_eq!(field.value, "2024-02-01");
+        assert_eq!(field.value, "2024-01-01");
         assert_eq!(field.update_op, UpdateOp::SetIfNull);
     }
 

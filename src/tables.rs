@@ -304,20 +304,22 @@ impl Rows {
 
 /// Holds field value and its update operation for UPSERT handling.
 #[derive(Debug, Clone, Default)]
-pub struct FieldValue {
-    pub value: String,
-    pub update_op: UpdateOp,
+struct FieldValue {
+    #[allow(dead_code)]
+    value: String,
+    #[allow(dead_code)]
+    update_op: UpdateOp,
 }
 
 impl FieldValue {
-    pub fn new(value: String) -> Self {
+    fn new(value: String) -> Self {
         FieldValue {
             value,
             update_op: UpdateOp::Set,
         }
     }
 
-    pub fn with_op(value: String, update_op: UpdateOp) -> Self {
+    fn with_op(value: String, update_op: UpdateOp) -> Self {
         FieldValue { value, update_op }
     }
 }
@@ -327,6 +329,7 @@ pub struct Row {
     /// Verify that we don't try to delete the same row as we're creating it
     pub operation: Operation,
     /// Map of field name to its value and update operation
+    #[allow(private_interfaces)]
     pub columns: HashMap<String, FieldValue>,
     /// Finalized: Last update or delete
     #[deprecated(
@@ -472,47 +475,44 @@ impl Row {
             value.to_string()
         };
 
-        let new_decimal = match BigDecimal::from_str(&value_str) {
-            Ok(d) => d,
-            Err(_) => {
-                self.columns.insert(name.to_string(), FieldValue::with_op(value_str, UpdateOp::Add));
-                return;
-            }
-        };
+        let new_decimal = BigDecimal::from_str(&value_str)
+            .unwrap_or_else(|_| panic!("add/sub() requires a valid numeric value for field '{}', got: {}", name, value));
 
         if let Some(existing) = self.columns.get(name) {
             if existing.update_op == UpdateOp::Set || existing.update_op == UpdateOp::Add {
-                if let Ok(existing_decimal) = BigDecimal::from_str(&existing.value) {
-                    let result = existing_decimal + new_decimal;
-                    // Keep existing op: Set stays Set (full value), Add stays Add (delta)
-                    self.columns.insert(name.to_string(), FieldValue::with_op(result.to_string(), existing.update_op));
-                    return;
-                }
+                let existing_decimal = BigDecimal::from_str(&existing.value)
+                    .expect("existing value should be valid BigDecimal");
+                let result = existing_decimal + new_decimal.clone();
+                // Keep existing op: Set stays Set (full value), Add stays Add (delta)
+                self.columns.insert(name.to_string(), FieldValue::with_op(result.to_string(), existing.update_op));
+                return;
             }
         }
 
-        self.columns.insert(name.to_string(), FieldValue::with_op(value_str, UpdateOp::Add));
+        self.columns.insert(name.to_string(), FieldValue::with_op(new_decimal.to_string(), UpdateOp::Add));
     }
 
     /// Set to the maximum of existing and new: column = GREATEST(COALESCE(column, new_value), new_value)
     /// Used with upsert_row() for tracking high values.
     /// Can only follow set() or another max() call on the same field.
     pub fn max<T: ToDatabaseValue>(&mut self, name: &str, value: T) -> &mut Self {
+        use std::str::FromStr;
         if self.operation == Operation::Delete {
             panic!("cannot set fields on a delete operation")
         }
         let new_value = value.to_value();
+        let new_decimal = BigDecimal::from_str(&new_value)
+            .unwrap_or_else(|_| panic!("max() requires a valid numeric value for field '{}', got: {}", name, new_value));
         // Check for invalid transitions and compute maximum if there's an existing value
         if let Some(existing) = self.columns.get(name) {
             match existing.update_op {
                 UpdateOp::Set | UpdateOp::Max => {
                     // Compute the maximum of existing and new values
-                    if let (Ok(existing_num), Ok(new_num)) = (existing.value.parse::<f64>(), new_value.parse::<f64>()) {
-                        let max_val = if new_num > existing_num { new_value } else { existing.value.clone() };
-                        self.columns.insert(name.to_string(), FieldValue::with_op(max_val, UpdateOp::Max));
-                        return self;
-                    }
-                    // If parsing fails, fall through to just insert the new value
+                    let existing_decimal = BigDecimal::from_str(&existing.value)
+                        .expect("existing value should be valid BigDecimal");
+                    let max_val = if new_decimal > existing_decimal { new_value } else { existing.value.clone() };
+                    self.columns.insert(name.to_string(), FieldValue::with_op(max_val, UpdateOp::Max));
+                    return self;
                 }
                 UpdateOp::Add => panic!(
                     "cannot call max() on field '{}' after add/sub() - incompatible operations",
@@ -536,21 +536,23 @@ impl Row {
     /// Used with upsert_row() for tracking low values.
     /// Can only follow set() or another min() call on the same field.
     pub fn min<T: ToDatabaseValue>(&mut self, name: &str, value: T) -> &mut Self {
+        use std::str::FromStr;
         if self.operation == Operation::Delete {
             panic!("cannot set fields on a delete operation")
         }
         let new_value = value.to_value();
+        let new_decimal = BigDecimal::from_str(&new_value)
+            .unwrap_or_else(|_| panic!("min() requires a valid numeric value for field '{}', got: {}", name, new_value));
         // Check for invalid transitions and compute minimum if there's an existing value
         if let Some(existing) = self.columns.get(name) {
             match existing.update_op {
                 UpdateOp::Set | UpdateOp::Min => {
                     // Compute the minimum of existing and new values
-                    if let (Ok(existing_num), Ok(new_num)) = (existing.value.parse::<f64>(), new_value.parse::<f64>()) {
-                        let min_val = if new_num < existing_num { new_value } else { existing.value.clone() };
-                        self.columns.insert(name.to_string(), FieldValue::with_op(min_val, UpdateOp::Min));
-                        return self;
-                    }
-                    // If parsing fails, fall through to just insert the new value
+                    let existing_decimal = BigDecimal::from_str(&existing.value)
+                        .expect("existing value should be valid BigDecimal");
+                    let min_val = if new_decimal < existing_decimal { new_value } else { existing.value.clone() };
+                    self.columns.insert(name.to_string(), FieldValue::with_op(min_val, UpdateOp::Min));
+                    return self;
                 }
                 UpdateOp::Add => panic!(
                     "cannot call min() on field '{}' after add/sub() - incompatible operations",
@@ -1473,27 +1475,11 @@ mod update_op_tests {
     // ============================================================
 
     #[test]
-    fn add_non_numeric_stores_as_is() {
+    #[should_panic(expected = "add/sub() requires a valid numeric value")]
+    fn add_non_numeric_panics() {
         let mut tables = Tables::new();
         let row = tables.upsert_row("test", "pk1");
-        row.add("name", "hello");
-
-        let field = row.columns.get("name").unwrap();
-        assert_eq!(field.value, "hello");
-        assert_eq!(field.update_op, UpdateOp::Add);
-    }
-
-    #[test]
-    fn add_non_numeric_twice_last_wins() {
-        let mut tables = Tables::new();
-        let row = tables.upsert_row("test", "pk1");
-        row.add("name", "hello");
-        row.add("name", "world");
-
-        // When values can't be parsed as numbers, second add just overwrites
-        let field = row.columns.get("name").unwrap();
-        assert_eq!(field.value, "world");
-        assert_eq!(field.update_op, UpdateOp::Add);
+        row.add("name", "hello"); // Should panic
     }
 
     // ============================================================
